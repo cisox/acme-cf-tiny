@@ -1,12 +1,12 @@
 # acme-tiny
 
-[![Build Status](https://travis-ci.org/diafygi/acme-tiny.svg)](https://travis-ci.org/diafygi/acme-tiny)
-[![Coverage Status](https://coveralls.io/repos/diafygi/acme-tiny/badge.svg?branch=master&service=github)](https://coveralls.io/github/diafygi/acme-tiny?branch=master)
+[![Build Status](https://travis-ci.org/cisox/acme-cf-tiny.svg)](https://travis-ci.org/cisox/acme-cf-tiny)
+[![Coverage Status](https://coveralls.io/repos/cisox/acme-cf-tiny/badge.svg?branch=master&service=github)](https://coveralls.io/github/cisox/acme-cf-tiny?branch=master)
 
 This is a tiny, auditable script that you can throw on your server to issue
 and renew [Let's Encrypt](https://letsencrypt.org/) certificates. Since it has
 to be run on your server and have access to your private Let's Encrypt account
-key, I tried to make it as tiny as possible (currently less than 200 lines).
+key, I tried to make it as tiny as possible (currently less than 300 lines).
 The only prerequisites are python and openssl.
 
 **PLEASE READ THE SOURCE CODE! YOU MUST TRUST IT WITH YOUR PRIVATE ACCOUNT KEY!**
@@ -79,34 +79,11 @@ openssl req -new -sha256 -key domain.key -subj "/CN=yoursite.com" > domain.csr
 openssl req -new -sha256 -key domain.key -subj "/" -reqexts SAN -config <(cat /etc/ssl/openssl.cnf <(printf "[SAN]\nsubjectAltName=DNS:yoursite.com,DNS:www.yoursite.com")) > domain.csr
 ```
 
-### Step 3: Make your website host challenge files
+### Step 3: Retrieve your CloudFlare Global API key and Zone Id
 
 You must prove you own the domains you want a certificate for, so Let's Encrypt
-requires you host some files on them. This script will generate and write those
-files in the folder you specify, so all you need to do is make sure that this
-folder is served under the ".well-known/acme-challenge/" url path. NOTE: Let's
-Encrypt will perform a plain HTTP request to port 80 on your server, so you
-must serve the challenge files via HTTP (a redirect to HTTPS is fine too).
-
-```
-# Make some challenge folder (modify to suit your needs)
-mkdir -p /var/www/challenges/
-```
-
-```nginx
-# Example for nginx
-server {
-    listen 80;
-    server_name yoursite.com www.yoursite.com;
-
-    location /.well-known/acme-challenge/ {
-        alias /var/www/challenges/;
-        try_files $uri =404;
-    }
-
-    ...the rest of your config
-}
-```
+requires you add some DNS records for them. This script will generate and update
+CloudFlare DNS with those records.
 
 ### Step 4: Get a signed certificate!
 
@@ -116,7 +93,7 @@ and read your private account key and CSR.
 
 ```
 # Run the script on your server
-python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /var/www/challenges/ > ./signed_chain.crt
+python acme_cf_tiny.py --account-key ./account.key --csr ./domain.csr --cf-zone 1a79a4d60de6718e8e5b326e338ae533 --cf-email=mail@example.com --cf-key=3c6e0b8a9c15224a8228b9a98ca1531d > ./signed_chain.crt
 ```
 
 ### Step 5: Install the certificate
@@ -189,9 +166,9 @@ it to the acme-tiny certificate output.
 
 The biggest problem you'll likely come across while setting up and running this
 script is permissions. You want to limit access to your account private key and
-challenge web folder as much as possible. I'd recommend creating a user
+CloudFlare API key as much as possible. I'd recommend creating a user
 specifically for handling this script, the account private key, and the
-challenge folder. Then add the ability for that user to write to your installed
+CloudFlare API key. Then add the ability for that user to write to your installed
 certificate file (e.g. `/path/to/signed_chain.crt`) and reload your webserver. That
 way, the cron script will do its thing, overwrite your old certificate, and
 reload your webserver without having permission to do anything else.
