@@ -1,10 +1,11 @@
 #!/usr/bin/env python
 # Copyright Daniel Roesler, under MIT license, see LICENSE at github.com/diafygi/acme-tiny
 import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap, logging
+
 try:
-    from urllib.request import urlopen, Request # Python 3
+    from urllib.request import urlopen, Request, HTTPError, URLError # Python 3
 except ImportError:
-    from urllib2 import urlopen, Request # Python 2
+    from urllib2 import urlopen, Request, HTTPError, URLError # Python 2
 
 DEFAULT_CA = "https://acme-v02.api.letsencrypt.org" # DEPRECATED! USE DEFAULT_DIRECTORY_URL INSTEAD
 DEFAULT_DIRECTORY_URL = "https://acme-v02.api.letsencrypt.org/directory"
@@ -13,7 +14,7 @@ LOGGER = logging.getLogger(__name__)
 LOGGER.addHandler(logging.StreamHandler())
 LOGGER.setLevel(logging.INFO)
 
-def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check=False, directory_url=DEFAULT_DIRECTORY_URL, contact=None):
+def get_crt(account_key, csr, cf_email, cf_key, cf_zone, log=LOGGER, CA=DEFAULT_CA, disable_check=False, directory_url=DEFAULT_DIRECTORY_URL, contact=None):
     directory, acct_headers, alg, jwk = None, None, None, None # global variables
 
     # helper functions - base64 encode for jose spec
@@ -68,6 +69,81 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
                 time.sleep(2)
                 continue
             return result
+
+    def _delete_dns(record_id):
+        url = "https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s" % (cf_zone, record_id)
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Email": cf_email,
+            "X-Auth-Key": cf_key,
+        }
+
+        req = Request(url=url, headers=headers)
+        req.get_method = lambda: 'DELETE'
+
+        try:
+            resp = urlopen(req)
+        except HTTPError as httperror:
+            raise ValueError(
+                "Error deleting DNS records: {0} : {1}".format(type(httperror).__name__, str(httperror)))
+        except URLError as urlerror:
+            raise ValueError("Error deleting DNS records: {0} : {1}".format(type(urlerror).__name__, str(urlerror)))
+        else:
+            response_data = resp.read()
+            response_data = json.loads(response_data.decode("utf-8"))
+
+            if not response_data["success"]:
+                raise ValueError("Error deleting DNS records: {0}".format(", ".join(response_data["errors"])))
+
+    def _get_dns(domain):
+        url = "https://cloudflare-dns.com/dns-query?ct=application/dns-json&name=%s&type=TXT" % (domain)
+
+        record, _, _ = _do_request(url, err_msg="Error checking DNS")
+
+        if "Answer" not in record:
+            return None
+
+        return record['Answer']['data']
+
+    # helper function to add DNS entries to CloudFlare
+    def _add_dns(name, type, data, ttl):
+        url = "https://api.cloudflare.com/client/v4/zones/%s/dns_records" % (cf_zone)
+
+        headers = {
+            "Content-Type": "application/json",
+            "X-Auth-Email": cf_email,
+            "X-Auth-Key": cf_key
+        }
+
+        request_data = {
+            "type": type,
+            "name": name,
+            "content": data,
+            "ttl": ttl,
+        }
+
+        request_data = json.dumps(request_data)
+        request_data = str(request_data)
+        request_data = request_data.encode("utf-8")
+
+        req = Request(url=url, headers=headers, data=request_data)
+
+        try:
+            resp = urlopen(req)
+        except HTTPError as httperror:
+            raise ValueError(
+                "Error updating DNS records: {0} : {1}".format(type(httperror).__name__, str(httperror)))
+        except URLError as urlerror:
+            raise ValueError("Error updating DNS records: {0} : {1}".format(type(urlerror).__name__, str(urlerror)))
+        else:
+            response_data = resp.read()
+            response_data = json.loads(response_data.decode("utf-8"))
+
+            if not response_data["success"]:
+                raise ValueError("Error updating DNS records: {0}".format(", ".join(response_data["errors"])))
+
+        return response_data["result"]["id"]
 
     # parse account key to get public key
     log.info("Parsing account key...")
@@ -126,28 +202,30 @@ def get_crt(account_key, csr, acme_dir, log=LOGGER, CA=DEFAULT_CA, disable_check
         domain = authorization['identifier']['value']
         log.info("Verifying {0}...".format(domain))
 
-        # find the http-01 challenge and write the challenge file
-        challenge = [c for c in authorization['challenges'] if c['type'] == "http-01"][0]
+        # find the dns-01 challenge and write the challenge file
+        challenge = [c for c in authorization['challenges'] if c['type'] == "dns-01"][0]
         token = re.sub(r"[^A-Za-z0-9_\-]", "_", challenge['token'])
         keyauthorization = "{0}.{1}".format(token, thumbprint)
-        wellknown_path = os.path.join(acme_dir, token)
-        with open(wellknown_path, "w") as wellknown_file:
-            wellknown_file.write(keyauthorization)
+        keydigest64 = _b64(hashlib.sha256(keyauthorization.encode("utf8")).digest())
+        subdomain = "_acme-challenge"
+        record_id = _add_dns(subdomain, "TXT", keydigest64, 300)
 
-        # check that the file is in place
         try:
-            wellknown_url = "http://{0}/.well-known/acme-challenge/{1}".format(domain, token)
-            assert(disable_check or _do_request(wellknown_url)[0] == keyauthorization)
+            assert(disable_check or _get_dns("%s.%s" % (subdomain, domain)) == '"{0}"'.format(keydigest64))
         except (AssertionError, ValueError) as e:
-            os.remove(wellknown_path)
-            raise ValueError("Wrote file to {0}, but couldn't download {1}: {2}".format(wellknown_path, wellknown_url, e))
+            _delete_dns(record_id)
+            raise ValueError("Updated DNS to {0}, but couldn't retrieve it: {1}".format(subdomain, e))
 
         # say the challenge is done
         _send_signed_request(challenge['url'], {}, "Error submitting challenges: {0}".format(domain))
         authorization = _poll_until_not(auth_url, ["pending"], "Error checking challenge status for {0}".format(domain))
         if authorization['status'] != "valid":
+            _delete_dns(record_id)
             raise ValueError("Challenge did not pass for {0}: {1}".format(domain, authorization))
+
         log.info("{0} verified!".format(domain))
+
+        _delete_dns(record_id)
 
     # finalize the order with the csr
     log.info("Signing certificate...")
@@ -170,20 +248,22 @@ def main(argv=None):
         description=textwrap.dedent("""\
             This script automates the process of getting a signed TLS certificate from Let's Encrypt using
             the ACME protocol. It will need to be run on your server and have access to your private
-            account key, so PLEASE READ THROUGH IT! It's only ~200 lines, so it won't take long.
+            account key, so PLEASE READ THROUGH IT! It's only ~300 lines, so it won't take long.
 
             Example Usage:
-            python acme_tiny.py --account-key ./account.key --csr ./domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > signed_chain.crt
+            python acme_cf_tiny.py --account-key ./account.key --csr ./domain.csr --cf-zone 1a79a4d60de6718e8e5b326e338ae533 --cf-email=mail@example.com --cf-key=3c6e0b8a9c15224a8228b9a98ca1531d > signed_chain.crt
 
             Example Crontab Renewal (once per month):
-            0 0 1 * * python /path/to/acme_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --acme-dir /usr/share/nginx/html/.well-known/acme-challenge/ > /path/to/signed_chain.crt 2>> /var/log/acme_tiny.log
+            0 0 1 * * python /path/to/acme_cf_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --cf-zone 1a79a4d60de6718e8e5b326e338ae533 --cf-email=mail@example.com --cf-key=3c6e0b8a9c15224a8228b9a98ca1531d > /path/to/signed_chain.crt 2>> /var/log/acme_tiny.log
             """)
     )
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
     parser.add_argument("--csr", required=True, help="path to your certificate signing request")
-    parser.add_argument("--acme-dir", required=True, help="path to the .well-known/acme-challenge/ directory")
+    parser.add_argument("--cf-zone", required=True, help="CloudFlare zone id")
+    parser.add_argument("--cf-email", required=True, help="CloudFlare account email address")
+    parser.add_argument("--cf-key", required=True, help="CloudFlare global API key")
     parser.add_argument("--quiet", action="store_const", const=logging.ERROR, help="suppress output except for errors")
-    parser.add_argument("--disable-check", default=False, action="store_true", help="disable checking if the challenge file is hosted correctly before telling the CA")
+    parser.add_argument("--disable-check", default=False, action="store_true", help="disable checking if the DNS record is present before telling the CA")
     parser.add_argument("--directory-url", default=DEFAULT_DIRECTORY_URL, help="certificate authority directory url, default is Let's Encrypt")
     parser.add_argument("--ca", default=DEFAULT_CA, help="DEPRECATED! USE --directory-url INSTEAD!")
     parser.add_argument("--contact", metavar="CONTACT", default=None, nargs="*", help="Contact details (e.g. mailto:aaa@bbb.com) for your account-key")
