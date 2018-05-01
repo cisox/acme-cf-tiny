@@ -93,7 +93,7 @@ and read your private account key and CSR.
 
 ```
 # Run the script on your server
-python acme_cf_tiny.py --account-key ./account.key --csr ./domain.csr --cf-zone 1a79a4d60de6718e8e5b326e338ae533 --cf-email=mail@example.com --cf-key=3c6e0b8a9c15224a8228b9a98ca1531d > ./signed_chain.crt
+python acme_cf_tiny.py --account-key ./account.key --csr ./domain.csr --cf-zone cf-zone --cf-email cf-email --cf-key cf-key > ./signed_chain.crt
 ```
 
 ### Step 5: Install the certificate
@@ -143,7 +143,7 @@ for example script).
 Example of a `renew_cert.sh`:
 ```sh
 #!/usr/bin/sh
-python /path/to/acme_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --acme-dir /var/www/challenges/ > /path/to/signed_chain.crt || exit
+python /path/to/acme_cf_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --cf-zone cf-zone-id --cf-emai cf-email --cf-key cf-key > /path/to/signed_chain.crt || exit
 service nginx reload
 ```
 

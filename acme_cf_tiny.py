@@ -253,10 +253,10 @@ def main(argv=None):
             account key, so PLEASE READ THROUGH IT! It's only ~300 lines, so it won't take long.
 
             Example Usage:
-            python acme_cf_tiny.py --account-key ./account.key --csr ./domain.csr --cf-zone 1a79a4d60de6718e8e5b326e338ae533 --cf-email=mail@example.com --cf-key=3c6e0b8a9c15224a8228b9a98ca1531d > signed_chain.crt
+            python acme_cf_tiny.py --account-key ./account.key --csr ./domain.csr --cf-zone cf-zone --cf-email cf-email --cf-key cf-key > signed_chain.crt
 
             Example Crontab Renewal (once per month):
-            0 0 1 * * python /path/to/acme_cf_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --cf-zone 1a79a4d60de6718e8e5b326e338ae533 --cf-email=mail@example.com --cf-key=3c6e0b8a9c15224a8228b9a98ca1531d > /path/to/signed_chain.crt 2>> /var/log/acme_tiny.log
+            0 0 1 * * python /path/to/acme_cf_tiny.py --account-key /path/to/account.key --csr /path/to/domain.csr --cf-zone cf-zone --cf-email cf-email --cf-key cf-key > /path/to/signed_chain.crt 2>> /var/log/acme_cf_tiny.log
             """)
     )
     parser.add_argument("--account-key", required=True, help="path to your Let's Encrypt account private key")
