@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 # Copyright Daniel Roesler, under MIT license, see LICENSE at github.com/diafygi/acme-tiny
+# Copyright Adrien Dorsaz, under MIT license, see LICENSE at github.com/Trim/acme-dns-tiny
+# Copyright Brandon Peters, under MIT license, see LICENSE at github.com/cisox/acme-cf-tiny
 import argparse, subprocess, json, os, sys, base64, binascii, time, hashlib, re, copy, textwrap, logging
 
 try:
